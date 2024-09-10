@@ -13,12 +13,25 @@ It provides some features like:
 - Usage history
 
 ## Installation
-- Create postgres database
+- Create postgres database, at least version 13
 ```bash
-psql
+docker run -d \
+	--name llm_proxy_db \
+    -p 5432:5432 \
+	-e POSTGRES_PASSWORD=mysecretpassword \
+	-e PGDATA=/var/lib/postgresql/data/pgdata \
+	-v ~/tung/Docker/llm_proxy_db:/var/lib/postgresql/data \
+	postgres:16.4
+```
+
+Login into postgres shell
+```bash
+psql -U postgres
 CREATE DATABASE llm_proxy;
 CREATE USER llm_proxy_user WITH PASSWORD 'llm_proxy_password';
 GRANT ALL PRIVILEGES ON DATABASE llm_proxy TO llm_proxy_user;
+\c llm_proxy; # select database
+GRANT ALL PRIVILEGES ON SCHEMA public TO llm_proxy_user;
 ```
 
 - Create .env file
@@ -36,7 +49,14 @@ pip install -r requirements.txt
 
 ## Development
 ```bash
+# Migrate database
+python3 manage.py migrate
 
+# Run server
+python3 manage.py runserver
+
+# Create superuser
+python3 manage.py createsuperuser
 ```
 
 ## Deployment
@@ -47,6 +67,10 @@ pip install -r requirements.txt
 ```bash
 
 ```
+
+## Security checklist
+
+## Performance checklist
 
 ## CI/CD
 

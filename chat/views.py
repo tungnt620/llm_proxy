@@ -1,32 +1,24 @@
 import os
-import sys
-import asyncio
 import json
-from hashlib import sha256
 import tempfile
 import base64
 import uuid
 import openai
-import time
-import datetime
 import tiktoken
 import logging
 
 from provider.models import ApiKey
 from stats.models import TokenUsage
 from .models import Conversation, Message, EmbeddingDocument, Setting, Prompt
-from django.conf import settings
 from django.http import StreamingHttpResponse
 from django.forms.models import model_to_dict
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework.decorators import api_view, authentication_classes, permission_classes, action
+from rest_framework.decorators import api_view, permission_classes, action
 from .serializers import ConversationSerializer, MessageSerializer, PromptSerializer, EmbeddingDocumentSerializer, SettingSerializer
 from utils.search_prompt import compile_prompt
 from utils.duckduckgo_search import web_search, SearchRequest
-from .tools import TOOL_LIST
 from .llm import get_embedding_document, unpick_faiss, langchain_doc_chat
 from .llm import setup_openai_env as llm_openai_env
 from .llm import setup_openai_model as llm_openai_model
@@ -394,12 +386,6 @@ def conversation(request):
 
     message_object = message_object_list[-1]
     message_type = message_object.get('message_type', 0)
-    tool_name = message_object.get('tool', None)
-    tool_args = message_object.get('tool_args', None)
-    if tool_name:
-        tool = {'name': tool_name, 'args': tool_args}
-    else:
-        tool = None
 
     logger.debug('conversation_id = %s message_objects = %s', conversation_id, message_object_list)
 
@@ -427,7 +413,7 @@ def conversation(request):
     llm_openai_model(model)
 
     try:
-        messages = build_messages(model, request.user, conversation_id, message_object_list, web_search_params, system_content, frugal_mode, tool, message_type)
+        messages = build_messages(model, request.user, conversation_id, message_object_list, web_search_params, system_content, frugal_mode, message_type)
         # message_object_list will be changed in build_messages
 
         new_doc_id = messages.get('doc_id', None)
@@ -657,7 +643,7 @@ def increase_token_usage(user, tokens, api_key=None):
         api_key.save()
 
 
-def build_messages(model, user, conversation_id, new_messages, web_search_params, system_content, frugal_mode = False, tool = None, message_type=0):
+def build_messages(model, user, conversation_id, new_messages, web_search_params, system_content, frugal_mode=False, message_type=0):
     if conversation_id:
         ordered_messages = Message.objects.filter(conversation_id=conversation_id).order_by('created_at')
         ordered_messages_list = list(ordered_messages)
@@ -706,17 +692,7 @@ def build_messages(model, user, conversation_id, new_messages, web_search_params
         if web_search_params is not None and first_msg:
             search_results = web_search(SearchRequest(message['message'], ua=web_search_params['ua']), num_results=5)
             message_content = compile_prompt(search_results, message['message'], default_prompt=web_search_params['default_prompt'])
-        if tool and first_msg:  # apply to latest message only
-            tool_name = tool['name']
-            func = TOOL_LIST.get(tool_name, None)
-            if tool_name == 'arxiv':
-                if not tool.get('args', None):
-                    tool['args'] = {}
-                args = tool['args']
-                args['conversation_id'] = conversation_id
-                args['user'] = user
-            if func:
-                message_content = func(message['message'], tool['args'])
+
         if message_type in [
             Message.hidden_message_type,
             Message.arxiv_context_message_type,
@@ -740,30 +716,6 @@ def build_messages(model, user, conversation_id, new_messages, web_search_params
                         else:
                             faiss_store = vector_store
                         logger.debug('document obj %s %s loaded', doc_id, doc_obj.title)
-            elif message_type == Message.arxiv_context_message_type:
-                if first_msg:
-                    doc_id = tool['args'].get('embedding_doc_id', None)
-                    doc_title = tool['args'].get('doc_title', None)
-                    new_messages[-1]['content'] = message_content
-                    new_messages[-1]['embedding_message_doc'] = doc_id
-                    result['doc_id'] = doc_id
-                    result['doc_title'] = doc_title
-                else:
-                    doc_id = message['embedding_message_doc']
-                if doc_id:
-                    message['embedding_message_doc'] = doc_id
-                    logger.debug('get the arxiv document id %s', doc_id)
-                    doc_obj = EmbeddingDocument.objects.get(id=doc_id)
-                    if doc_obj:
-                        logger.debug('get the document obj %s %s', doc_id, doc_obj.title)
-                        vector_store = unpick_faiss(doc_obj.faiss_store)
-                        if faiss_store:
-                            faiss_store.merge_from(vector_store)
-                        else:
-                            faiss_store = vector_store
-                        logger.debug('document obj %s %s loaded', doc_id, doc_obj.title)
-                else:
-                    raise RuntimeError('ArXiv document failed to download or embed')
         else:
             new_message = {"role": role, "content": message_content}
             new_token_count = num_tokens_from_messages(system_messages + messages + [new_message], model['name'])

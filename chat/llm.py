@@ -1,12 +1,10 @@
 import os
-import sys
 import logging
 import asyncio
 import threading
 import queue
 import pickle
-from typing import Any, Dict, Optional, Union, Mapping
-import uuid
+from typing import Any, Dict, Optional, Union
 from uuid import UUID
 import faiss
 import hashlib
@@ -25,29 +23,15 @@ from langchain.vectorstores import FAISS
 from langchain.prompts.prompt import PromptTemplate
 
 from langchain.chat_models import ChatOpenAI
-from langchain.schema import (
-    AIMessage,
-    HumanMessage,
-    SystemMessage,
-    ChatGeneration,
-    ChatResult,
-)
 from langchain.chains import (
     LLMChain,
     ConversationalRetrievalChain,
 )
 from langchain.chains.question_answering import load_qa_chain
-from langchain.chains.conversational_retrieval.prompts import CONDENSE_QUESTION_PROMPT
 from langchain.memory import ConversationBufferWindowMemory
-from langchain.callbacks import get_openai_callback
-from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from langchain.callbacks.base import (
     BaseCallbackHandler,
     AsyncCallbackHandler,
-)
-from langchain.callbacks.manager import (
-    CallbackManagerForChainRun,
-    AsyncCallbackManagerForChainRun,
 )
 
 logger = logging.getLogger(__name__)
