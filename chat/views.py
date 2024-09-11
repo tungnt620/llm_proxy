@@ -1,8 +1,5 @@
 import os
 import json
-import tempfile
-import base64
-import uuid
 import openai
 import tiktoken
 import logging
@@ -16,24 +13,21 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes, action
-from .serializers import ConversationSerializer, MessageSerializer, PromptSerializer, EmbeddingDocumentSerializer, SettingSerializer
-from utils.search_prompt import compile_prompt
-from utils.duckduckgo_search import web_search, SearchRequest
-from .llm import get_embedding_document, unpick_faiss, langchain_doc_chat
+from .serializers import ConversationSerializer, MessageSerializer, PromptSerializer, SettingSerializer
 from .llm import setup_openai_env as llm_openai_env
 from .llm import setup_openai_model as llm_openai_model
 
-
 logger = logging.getLogger(__name__)
+
 
 class SettingViewSet(viewsets.ModelViewSet):
     serializer_class = SettingSerializer
+
     # permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         available_names = [
             'open_registration',
-            'open_web_search',
             'open_api_key_setting',
             'open_frugal_mode_control',
         ]
@@ -64,6 +58,7 @@ class MessageViewSet(viewsets.ModelViewSet):
     serializer_class = MessageSerializer
     # authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+
     # queryset = Message.objects.all()
 
     def get_queryset(self):
@@ -92,98 +87,6 @@ class PromptViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-
-    @action(detail=False, methods=['delete'])
-    def delete_all(self, request):
-        queryset = self.filter_queryset(self.get_queryset())
-        queryset.delete()
-        return Response(status=204)
-
-
-class EmbeddingDocumentViewSet(viewsets.ModelViewSet):
-    serializer_class = EmbeddingDocumentSerializer
-    # authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return EmbeddingDocument.objects.filter(user=self.request.user).order_by('-created_at')
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.validated_data['user'] = request.user
-
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-
-    def get_embedding(self):
-        """get the faiss_store of uploaded file"""
-
-        openai_api_key = self.request.data.get('openaiApiKey', None)
-        api_key = None
-
-        if openai_api_key is None:
-            openai_api_key = get_api_key_from_setting()
-
-        if openai_api_key is None:
-            api_key = get_api_key()
-            if api_key:
-                openai_api_key = api_key.key
-            else:
-                return Response(
-                    {
-                        'error': 'There is no available API key'
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-        my_openai = get_openai(openai_api_key)
-        llm_openai_env(my_openai.api_base, my_openai.api_key)
-
-        # Get the uploaded file from the request
-        file_data = self.request.data.get('file')
-        file_mime, file_url = file_data.split(',')
-        file_mime = file_mime.split(':')[1].split(';')[0]
-        file_bytes = base64.b64decode(file_url)
-
-        logger.debug('user %s upload a file %s %s', self.request.user, file_mime, self.request.data['title'])
-
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            dump_basename = 'fh' + str(uuid.uuid4()).replace('-', '')
-            dump_name = os.path.join(tmpdirname, dump_basename)
-            if 'text/' in file_mime:
-                file_content = file_bytes.decode('utf-8')
-                mode = 'w'
-            else:
-                file_content = file_bytes
-                mode = 'wb'
-            # dump_basename = 'fh' + str(uuid.uuid4()).replace('-', '')
-            # dump_name = os.path.join(tmpdirname, dump_basename)
-            with open(dump_name, mode) as f:
-                f.write(file_content)
-
-            faiss_store = get_embedding_document(dump_name, file_mime)
-
-        return faiss_store
-
-    def perform_create(self, serializer):
-        faiss_store = self.get_embedding()
-
-        # Set the `value` field on the serializer instance
-        serializer.validated_data['faiss_store'] = faiss_store
-
-        # Call the serializer's `save` method to create the new instance
-        serializer.save()
-
-    def perform_update(self, serializer):
-        faiss_store = self.get_embedding()
-
-        # Set the `value` field on the serializer instance
-        serializer.validated_data['faiss_store'] = faiss_store
-
-        # Call the serializer's `save` method to update the instance
-        serializer.save()
 
     @action(detail=False, methods=['delete'])
     def delete_all(self, request):
@@ -228,7 +131,7 @@ MODELS = {
         'max_tokens': 131072,
         'max_prompt_tokens': 123072,
         'max_response_tokens': 8000,
-    }    
+    }
 }
 
 
@@ -306,7 +209,7 @@ def gen_title(request):
 @permission_classes([IsAuthenticated])
 def upload_conversations(request):
     """allow user to import a list of conversations"""
-    user=request.user
+    user = request.user
     import_err_msg = 'bad_import'
     conversation_ids = []
     try:
@@ -360,7 +263,7 @@ def upload_conversations(request):
             {'error': import_err_msg},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     # return a list of new conversation id
     return Response(conversation_ids)
 
@@ -380,12 +283,8 @@ def conversation(request):
     top_p = request.data.get('top_p', 1)
     frequency_penalty = request.data.get('frequency_penalty', 0)
     presence_penalty = request.data.get('presence_penalty', 0)
-    web_search_params = request.data.get('web_search')
     openai_api_key = request.data.get('openaiApiKey')
     frugal_mode = request.data.get('frugalMode', False)
-
-    message_object = message_object_list[-1]
-    message_type = message_object.get('message_type', 0)
 
     logger.debug('conversation_id = %s message_objects = %s', conversation_id, message_object_list)
 
@@ -413,7 +312,7 @@ def conversation(request):
     llm_openai_model(model)
 
     try:
-        messages = build_messages(model, request.user, conversation_id, message_object_list, web_search_params, system_content, frugal_mode, message_type)
+        messages = build_messages(model, conversation_id, message_object_list, system_content, frugal_mode)
         # message_object_list will be changed in build_messages
 
         new_doc_id = messages.get('doc_id', None)
@@ -463,8 +362,6 @@ def conversation(request):
                     user=request.user,
                     conversation_id=conversation_obj.id,
                     message=m['content'],
-                    message_type=m.get('message_type', 0),
-                    embedding_doc_id=m.get('embedding_message_doc', 0),
                     messages=messages['messages'],
                     tokens=messages['tokens'],
                     api_key=api_key
@@ -478,7 +375,7 @@ def conversation(request):
                     'error': e
                 },
                 status=status.HTTP_400_BAD_REQUEST
-            ) 
+            )
 
         collected_events = []
         completion_text = ''
@@ -519,90 +416,10 @@ def conversation(request):
             'newDocId': new_doc_id,
         })
 
-    def stream_langchain():
-        if messages['renew']:  # if the new user message is sending to AI
-            try:
-                # get a results generator
-                gen = langchain_doc_chat(messages)
-            except Exception as e:
-                yield sse_pack('error', {
-                    'error': str(e)
-                })
-                logger.debug('langchain error %s', e)
-        # create conversation
-        if conversation_id:
-            # get the conversation
-            conversation_obj = Conversation.objects.get(id=conversation_id)
-        else:
-            # create a new conversation
-            conversation_obj = Conversation(user=request.user)
-            conversation_obj.save()
-        # insert new user messages
-        try:
-            for m in message_object_list:
-                message_obj = create_message(
-                    user=request.user,
-                    conversation_id=conversation_obj.id,
-                    message=m['content'],
-                    message_type=m.get('message_type', 0),
-                    embedding_doc_id=m.get('embedding_message_doc', 0),
-                    messages=messages['messages'],
-                    tokens=messages['tokens'],
-                    api_key=api_key
-                )
-                yield sse_pack('userMessageId', {
-                    'userMessageId': message_obj.id,
-                })
-        except Exception as e:
-            return Response({'error': e}, status=status.HTTP_400_BAD_REQUEST)
-
-        completion_text = ''
-        if messages['renew']:  # if AI has read and replied this message
-            for event in gen:
-                if event['status'] == 'done':
-                    pass
-                else:
-                    text = event['content']
-                    if text:
-                        completion_text += str(text)
-                        yield sse_pack('message', {'content': str(text)})
-            bot_message_type = Message.plain_message_type
-        else:   # else, this message was not produced by AI
-            if new_doc_title:
-                completion_text = f'{new_doc_title} added.'
-            else:
-                completion_text = 'Context added.'
-            yield sse_pack('message', {'content': completion_text})
-            bot_message_type = Message.temp_message_type
-
-        logger.debug('return message is: %s', completion_text)
-        ai_message_token = num_tokens_from_text(completion_text, model['name'])
-        ai_message_obj = create_message(
-            user=request.user,
-            conversation_id=conversation_obj.id,
-            message=completion_text,
-            message_type=bot_message_type,
-            is_bot=True,
-            tokens=ai_message_token,
-            api_key=api_key
-        )
-        yield sse_pack('done', {
-            'messageId': ai_message_obj.id,
-            'conversationId': conversation_obj.id,
-            'newDocId': new_doc_id,
-        })
-
-    if messages.get('faiss_store', None) and not web_search_params:
-        # this conversation has contexts, and this is not a web search
-        response = StreamingHttpResponse(
-            stream_langchain(),  # response generator
-            content_type='text/event-stream'
-        )
-    else:
-        response = StreamingHttpResponse(
-            stream_content(),
-            content_type='text/event-stream'
-        )
+    response = StreamingHttpResponse(
+        stream_content(),
+        content_type='text/event-stream'
+    )
     response['X-Accel-Buffering'] = 'no'
     response['Cache-Control'] = 'no-cache'
     return response
@@ -614,7 +431,8 @@ def documents(request):
     pass
 
 
-def create_message(user, conversation_id, message, is_bot=False, message_type=0, embedding_doc_id=None, messages='', tokens=0, api_key=None):
+def create_message(user, conversation_id, message, is_bot=False, message_type=0, embedding_doc_id=None, messages='',
+                   tokens=0, api_key=None):
     message_obj = Message(
         conversation_id=conversation_id,
         user=user,
@@ -643,7 +461,7 @@ def increase_token_usage(user, tokens, api_key=None):
         api_key.save()
 
 
-def build_messages(model, user, conversation_id, new_messages, web_search_params, system_content, frugal_mode=False, message_type=0):
+def build_messages(model, conversation_id, new_messages, system_content, frugal_mode=False):
     if conversation_id:
         ordered_messages = Message.objects.filter(conversation_id=conversation_id).order_by('created_at')
         ordered_messages_list = list(ordered_messages)
@@ -652,9 +470,7 @@ def build_messages(model, user, conversation_id, new_messages, web_search_params
 
     ordered_messages_list += [{
         'is_bot': False,
-        'message': msg['content'], 
-        'message_type': message_type,
-        'embedding_message_doc': msg.get('embedding_message_doc', None),
+        'message': msg['content'],
     } for msg in new_messages]
 
     if frugal_mode:
@@ -672,15 +488,10 @@ def build_messages(model, user, conversation_id, new_messages, web_search_params
         'renew': True,
         'messages': messages,
         'tokens': 0,
-        'faiss_store': None,
-        'doc_id': None,  # new doc id
     }
-
-    faiss_store = None
 
     logger.debug('new message is: %s', new_messages)
     logger.debug('messages are: %s', ordered_messages_list)
-    first_msg = True
 
     while current_token_count < max_token_count and len(ordered_messages_list) > 0:
         message = ordered_messages_list.pop()
@@ -688,56 +499,26 @@ def build_messages(model, user, conversation_id, new_messages, web_search_params
             message = model_to_dict(message)
         role = "assistant" if message['is_bot'] else "user"
         message_content = message['message']
-        message_type = message['message_type']
-        if web_search_params is not None and first_msg:
-            search_results = web_search(SearchRequest(message['message'], ua=web_search_params['ua']), num_results=5)
-            message_content = compile_prompt(search_results, message['message'], default_prompt=web_search_params['default_prompt'])
 
-        if message_type in [
-            Message.hidden_message_type,
-            Message.arxiv_context_message_type,
-            Message.doc_context_message_type,
-        ]:
-            # these messages only attached context to the conversation
-            # they should not be sent to the LLM
-            if first_msg:  # if the new message is a contextual message
-                result['renew'] = False
-            if message_type == Message.doc_context_message_type:
-                doc_id = message["embedding_message_doc"]
-                logger.debug('get a document %s', message_content)
-                if doc_id:
-                    logger.debug('get the document id %s', doc_id)
-                    doc_obj = EmbeddingDocument.objects.get(id=doc_id)
-                    if doc_obj:
-                        logger.debug('get the document obj %s %s', doc_id, doc_obj.title)
-                        vector_store = unpick_faiss(doc_obj.faiss_store)
-                        if faiss_store:
-                            faiss_store.merge_from(vector_store)
-                        else:
-                            faiss_store = vector_store
-                        logger.debug('document obj %s %s loaded', doc_id, doc_obj.title)
-        else:
-            new_message = {"role": role, "content": message_content}
-            new_token_count = num_tokens_from_messages(system_messages + messages + [new_message], model['name'])
-            if new_token_count > max_token_count:
-                if len(messages) > 0:
-                    break
-                raise ValueError(
-                    f"Prompt is too long. Max token count is {max_token_count}, but prompt is {new_token_count} tokens long.")
-            messages.insert(0, new_message)
-            current_token_count = new_token_count
-        first_msg = False
+        new_message = {"role": role, "content": message_content}
+        new_token_count = num_tokens_from_messages(system_messages + messages + [new_message], model['name'])
+        if new_token_count > max_token_count:
+            if len(messages) > 0:
+                break
+            raise ValueError(
+                f"Prompt is too long. Max token count is {max_token_count}, but prompt is {new_token_count} tokens long.")
+        messages.insert(0, new_message)
+        current_token_count = new_token_count
 
     result['messages'] = system_messages + messages
     result['tokens'] = current_token_count
-    result['faiss_store'] = faiss_store
 
     return result
 
 
 def get_current_model(model_name, request_max_response_tokens):
     if model_name is None:
-        model_name ="gpt-3.5-turbo"
+        model_name = "gpt-3.5-turbo"
     model = MODELS[model_name]
     if request_max_response_tokens is not None:
         model['max_response_tokens'] = int(request_max_response_tokens)
@@ -807,7 +588,7 @@ def num_tokens_from_messages(messages, model="gpt-3.5-turbo-0301"):
         "gpt-4o"
     ]:
         tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
-        tokens_per_name = -1    # if there's a name, the role is omitted
+        tokens_per_name = -1  # if there's a name, the role is omitted
     elif model in ["gpt-4-0613"]:
         tokens_per_message = 3
         tokens_per_name = 1

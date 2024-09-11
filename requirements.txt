@@ -37,6 +37,3 @@ tiktoken==0.4.0
 tqdm==4.66.5
 urllib3==1.26.20
 yarl==1.11.1
-faiss-cpu==1.7.4
-numpy==1.24.3
-langchain==0.0.159

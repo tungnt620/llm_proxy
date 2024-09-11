@@ -31,11 +31,7 @@ class Message(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     plain_message_type = 0
-    hidden_message_type = 1
-    temp_message_type = 2
-    web_search_context_message_type = 100
-    arxiv_context_message_type = 110
-    doc_context_message_type  = 120
+    temp_message_type = 1
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
