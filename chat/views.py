@@ -23,8 +23,6 @@ logger = logging.getLogger(__name__)
 class SettingViewSet(viewsets.ModelViewSet):
     serializer_class = SettingSerializer
 
-    # permission_classes = [IsAuthenticated]
-
     def get_queryset(self):
         available_names = [
             'open_registration',
@@ -41,7 +39,6 @@ class SettingViewSet(viewsets.ModelViewSet):
 
 class ConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
-    # authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
@@ -56,7 +53,6 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
 class MessageViewSet(viewsets.ModelViewSet):
     serializer_class = MessageSerializer
-    # authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     # queryset = Message.objects.all()
@@ -72,7 +68,6 @@ class MessageViewSet(viewsets.ModelViewSet):
 
 class PromptViewSet(viewsets.ModelViewSet):
     serializer_class = PromptSerializer
-    # authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
@@ -96,41 +91,11 @@ class PromptViewSet(viewsets.ModelViewSet):
 
 
 MODELS = {
-    'gpt-3.5-turbo': {
-        'name': 'gpt-3.5-turbo',
-        'max_tokens': 4096,
-        'max_prompt_tokens': 3096,
-        'max_response_tokens': 1000
-    },
-    'gpt-4': {
-        'name': 'gpt-4',
-        'max_tokens': 8192,
-        'max_prompt_tokens': 6192,
-        'max_response_tokens': 2000
-    },
-    'gpt-3.5-turbo-16k': {
-        'name': 'gpt-3.5-turbo-16k',
-        'max_tokens': 16384,
-        'max_prompt_tokens': 12384,
-        'max_response_tokens': 4000
-    },
-    'gpt-4-32k': {
-        'name': 'gpt-4-32k',
-        'max_tokens': 32768,
-        'max_prompt_tokens': 24768,
-        'max_response_tokens': 8000
-    },
-    'gpt-4-1106-preview': {
-        'name': 'gpt-4-1106-preview',
-        'max_tokens': 131072,
-        'max_prompt_tokens': 123072,
-        'max_response_tokens': 8000,
-    },
     'gpt-4o': {
         'name': 'gpt-4o',
-        'max_tokens': 131072,
-        'max_prompt_tokens': 123072,
-        'max_response_tokens': 8000,
+        'max_tokens': 144384,
+        'max_prompt_tokens': 128000,
+        'max_response_tokens': 16384,
     }
 }
 
@@ -144,134 +109,20 @@ def sse_pack(event, data):
 
 
 @api_view(['POST'])
-# @authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def gen_title(request):
-    conversation_id = request.data.get('conversationId')
-    prompt = request.data.get('prompt')
-    conversation_obj = Conversation.objects.get(id=conversation_id)
-    message = Message.objects.filter(conversation_id=conversation_id).order_by('created_at').first()
-    openai_api_key = request.data.get('openaiApiKey')
-    api_key = None
-
-    if openai_api_key is None:
-        openai_api_key = get_api_key_from_setting()
-
-    if openai_api_key is None:
-        api_key = get_api_key()
-        if api_key:
-            openai_api_key = api_key.key
-        else:
-            return Response(
-                {
-                    'error': 'There is no available API key'
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-    if prompt is None:
-        prompt = 'Generate a short title for the following content, no more than 10 words. \n\nContent: '
-
-    messages = [
-        {"role": "user", "content": prompt + message.message},
-    ]
-
-    my_openai = get_openai(openai_api_key)
-    try:
-        openai_response = my_openai.ChatCompletion.create(
-            model='gpt-3.5-turbo-0301',
-            messages=messages,
-            max_tokens=256,
-            temperature=0.5,
-            top_p=1,
-            frequency_penalty=0,
-            presence_penalty=0,
-        )
-        completion_text = openai_response['choices'][0]['message']['content']
-        title = completion_text.strip().replace('"', '')
-
-        # increment the token count
-        increase_token_usage(request.user, openai_response['usage']['total_tokens'], api_key)
-    except Exception as e:
-        print(e)
-        title = 'Untitled Conversation'
-    # update the conversation title
-    conversation_obj.topic = title
-    conversation_obj.save()
-
-    return Response({
-        'title': title
-    })
-
-
-@api_view(['POST'])
-# @authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def upload_conversations(request):
-    """allow user to import a list of conversations"""
-    user = request.user
-    import_err_msg = 'bad_import'
-    conversation_ids = []
-    try:
-        imports = request.data.get('imports')
-        # verify
-        conversations = []
-        for conversation in imports:
-            topic = conversation.get('conversation_topic', None)
-            messages = []
-            for message in conversation.get('messages'):
-                msg = {}
-                msg['role'] = message['role']
-                msg['content'] = message['content']
-                messages.append(msg)
-            if len(messages) > 0:
-                conversations.append({
-                    'topic': topic,
-                    'messages': messages,
-                })
-        # dump
-        for conversation in conversations:
-            topic = conversation['topic']
-            messages = conversation['messages']
-            cobj = Conversation(
-                topic=topic if topic else '',
-                user=user,
-            )
-            cobj.save()
-            conversation_ids.append(cobj.id)
-            for idx, msg in enumerate(messages):
-                try:
-                    Message._meta.get_field('user')
-                    mobj = Message(
-                        user=user,
-                        conversation=cobj,
-                        message=msg['content'],
-                        is_bot=msg['role'] != 'user',
-                        messages=messages[:idx + 1],
-                    )
-                except:
-                    mobj = Message(
-                        conversation=cobj,
-                        message=msg['content'],
-                        is_bot=msg['role'] != 'user',
-                        messages=messages[:idx + 1],
-                    )
-                mobj.save()
-    except Exception as e:
-        logger.debug(e)
-        return Response(
-            {'error': import_err_msg},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    # return a list of new conversation id
-    return Response(conversation_ids)
-
-
-@api_view(['POST'])
-# @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def conversation(request):
+    """
+    Handles a conversation request by interacting with the OpenAI API to generate responses.
+
+    This function processes the incoming request to generate a conversation response using the OpenAI API.
+    It supports streaming responses and handles various parameters such as model name, temperature, and penalties.
+
+    Args:
+        request (Request): The HTTP request object containing the conversation details and parameters.
+
+    Returns:
+        StreamingHttpResponse: A streaming HTTP response containing the conversation response or error messages.
+    """
     model_name = request.data.get('name')
     message_object_list = request.data.get('message')
     conversation_id = request.data.get('conversationId')
@@ -283,27 +134,22 @@ def conversation(request):
     top_p = request.data.get('top_p', 1)
     frequency_penalty = request.data.get('frequency_penalty', 0)
     presence_penalty = request.data.get('presence_penalty', 0)
-    openai_api_key = request.data.get('openaiApiKey')
     frugal_mode = request.data.get('frugalMode', False)
+    is_stream = request.data.get('is_stream', False)
 
     logger.debug('conversation_id = %s message_objects = %s', conversation_id, message_object_list)
 
     api_key = None
 
-    if openai_api_key is None:
-        openai_api_key = get_api_key_from_setting()
+    openai_api_key = get_api_key_from_setting()
 
     if openai_api_key is None:
-        api_key = get_api_key()
-        if api_key:
-            openai_api_key = api_key.key
-        else:
-            return Response(
-                {
-                    'error': 'There is no available API key'
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        return Response(
+            {
+                'error': 'There is no available API key'
+            },
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     my_openai = get_openai(openai_api_key)
     llm_openai_env(my_openai.api_base, my_openai.api_key)
@@ -313,11 +159,7 @@ def conversation(request):
 
     try:
         messages = build_messages(model, conversation_id, message_object_list, system_content, frugal_mode)
-        # message_object_list will be changed in build_messages
-
-        new_doc_id = messages.get('doc_id', None)
-        new_doc_title = messages.get('doc_title', None)
-        logger.debug('messages: %s\n%s\n%s', messages, new_doc_id, new_doc_title)
+        logger.debug('messages: %s', messages)
     except Exception as e:
         print(e)
         return Response(
@@ -333,12 +175,13 @@ def conversation(request):
                 openai_response = my_openai.ChatCompletion.create(
                     model=model['name'],
                     messages=messages['messages'],
-                    max_tokens=model['max_response_tokens'],
+                    max_completion_tokens=model['max_response_tokens'],
                     temperature=temperature,
                     top_p=top_p,
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
-                    stream=True,
+                    stream=is_stream,
+                    stream_options={"include_usage": True}
                 )
         except Exception as e:
             yield sse_pack('error', {
@@ -393,10 +236,7 @@ def conversation(request):
             bot_message_type = Message.plain_message_type
             ai_message_token = num_tokens_from_text(completion_text, model['name'])
         else:  # wait for process context
-            if new_doc_title:
-                completion_text = f'{new_doc_title} added.'
-            else:
-                completion_text = 'Context added.'
+            completion_text = 'Context added.'
             yield sse_pack('message', {'content': completion_text})
             bot_message_type = Message.temp_message_type
             ai_message_token = 0
@@ -413,7 +253,6 @@ def conversation(request):
         yield sse_pack('done', {
             'messageId': ai_message_obj.id,
             'conversationId': conversation_obj.id,
-            'newDocId': new_doc_id,
         })
 
     response = StreamingHttpResponse(
@@ -518,7 +357,7 @@ def build_messages(model, conversation_id, new_messages, system_content, frugal_
 
 def get_current_model(model_name, request_max_response_tokens):
     if model_name is None:
-        model_name = "gpt-3.5-turbo"
+        model_name = "gpt-4o"
     model = MODELS[model_name]
     if request_max_response_tokens is not None:
         model['max_response_tokens'] = int(request_max_response_tokens)
