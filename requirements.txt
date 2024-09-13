@@ -37,3 +37,6 @@ tiktoken==0.4.0
 tqdm==4.66.5
 urllib3==1.26.20
 yarl==1.11.1
+drf-spectacular==0.27.2
+drf-spectacular-sidecar==2024.7.1
+pydantic==2.9.1

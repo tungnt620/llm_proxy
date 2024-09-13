@@ -61,7 +61,9 @@ INSTALLED_APPS = [
     'dj_rest_auth.registration',
     'chat.apps.ChatConfig',
     'stats.apps.StatsConfig',
-    'provider.apps.ProviderConfig'
+    'provider.apps.ProviderConfig',
+    'drf_spectacular',
+    'drf_spectacular_sidecar',
 ]
 
 MIDDLEWARE = [
@@ -154,9 +156,22 @@ REST_FRAMEWORK = {
         # 'rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly',
         # 'rest_framework_simplejwt.authentication.JWTAuthentication'
         'dj_rest_auth.jwt_auth.JWTCookieAuthentication'
-    ]
+    ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'LLM Proxy API',
+    'DESCRIPTION': 'LLM proxy API',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SWAGGER_UI_DIST': 'SIDECAR',  # shorthand to use the sidecar instead
+    'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
+    'REDOC_DIST': 'SIDECAR',
+    # OTHER SETTINGS
+}
+
+# TODO: what it means?
 SITE_ID = 1
 
 REST_AUTH = {
