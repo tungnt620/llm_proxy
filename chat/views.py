@@ -1,21 +1,26 @@
-import os
 import json
+import logging
+import os
+
 import openai
 import tiktoken
-import logging
+from django.contrib.auth.models import User
+from django.forms.models import model_to_dict
+from django.http import StreamingHttpResponse
+from pydantic import BaseModel, ValidationError
+from rest_framework import viewsets, status
+from rest_framework.decorators import api_view, permission_classes, action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.request import Request
+from rest_framework.response import Response
 
 from provider.models import ApiKey
 from stats.models import TokenUsage
-from .models import Conversation, Message, EmbeddingDocument, Setting, Prompt
-from django.http import StreamingHttpResponse
-from django.forms.models import model_to_dict
-from rest_framework import viewsets, status
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.decorators import api_view, permission_classes, action
-from .serializers import ConversationSerializer, MessageSerializer, PromptSerializer, SettingSerializer
 from .llm import setup_openai_env as llm_openai_env
 from .llm import setup_openai_model as llm_openai_model
+from .models import Conversation, Message, EmbeddingDocument, Setting, Prompt
+from .serializers import ConversationSerializer, MessageSerializer, PromptSerializer, SettingSerializer
+from typing import List, Optional, Dict, Any, Union
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +101,12 @@ MODELS = {
         'max_tokens': 144384,
         'max_prompt_tokens': 128000,
         'max_response_tokens': 16384,
+    },
+    'gpt-4o-mini': {
+        'name': 'gpt-4o-mini',
+        'max_tokens': 144384,
+        'max_prompt_tokens': 128000,
+        'max_response_tokens': 16384,
     }
 }
 
@@ -108,14 +119,27 @@ def sse_pack(event, data):
     return packet
 
 
+class ConversationRequest(BaseModel):
+    name: Optional[str]
+    messages: List[str]
+    conversationId: Optional[int]
+    max_tokens: Optional[int]
+    system_content: Optional[str] = "You are a helpful assistant."
+    top_p: Optional[float] = 1
+    frequency_penalty: Optional[float] = 0
+    presence_penalty: Optional[float] = 0
+    frugalMode: Optional[bool] = False
+    is_stream: Optional[bool] = False
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def conversation(request):
+def conversation(request: Request) -> Response | StreamingHttpResponse:
     """
     Handles a conversation request by interacting with the OpenAI API to generate responses.
 
     This function processes the incoming request to generate a conversation response using the OpenAI API.
-    It supports streaming responses and handles various parameters such as model name, temperature, and penalties.
+    It supports streaming responses and handles various parameters such as model name, and penalties.
 
     Args:
         request (Request): The HTTP request object containing the conversation details and parameters.
@@ -123,21 +147,24 @@ def conversation(request):
     Returns:
         StreamingHttpResponse: A streaming HTTP response containing the conversation response or error messages.
     """
-    model_name = request.data.get('name')
-    message_object_list = request.data.get('message')
-    conversation_id = request.data.get('conversationId')
-    request_max_response_tokens = request.data.get('max_tokens')
-    system_content = request.data.get('system_content')
-    if not system_content:
-        system_content = "You are a helpful assistant."
-    temperature = request.data.get('temperature', 0.7)
-    top_p = request.data.get('top_p', 1)
-    frequency_penalty = request.data.get('frequency_penalty', 0)
-    presence_penalty = request.data.get('presence_penalty', 0)
-    frugal_mode = request.data.get('frugalMode', False)
-    is_stream = request.data.get('is_stream', False)
+    try:
+        # Validate request data using Pydantic
+        data = ConversationRequest(**request.data)
+    except ValidationError as e:
+        return Response({'error': e.errors()}, status=status.HTTP_400_BAD_REQUEST)
 
-    logger.debug('conversation_id = %s message_objects = %s', conversation_id, message_object_list)
+    model_name = data.name
+    raw_input_messages = data.messages
+    conversation_id = data.conversationId
+    request_max_response_tokens = data.max_tokens
+    system_content = data.system_content
+    top_p = data.top_p
+    frequency_penalty = data.frequency_penalty
+    presence_penalty = data.presence_penalty
+    frugal_mode = data.frugalMode
+    is_stream = data.is_stream
+
+    logger.debug('conversation_id = %s raw_input_messages = %s', conversation_id, raw_input_messages)
 
     api_key = None
 
@@ -158,7 +185,7 @@ def conversation(request):
     llm_openai_model(model)
 
     try:
-        messages = build_messages(model, conversation_id, message_object_list, system_content, frugal_mode)
+        messages = build_messages(model, conversation_id, raw_input_messages, system_content, frugal_mode)
         logger.debug('messages: %s', messages)
     except Exception as e:
         print(e)
@@ -171,12 +198,11 @@ def conversation(request):
 
     def stream_content():
         try:
-            if messages['renew']:
+            if messages.renew:
                 openai_response = my_openai.ChatCompletion.create(
                     model=model['name'],
-                    messages=messages['messages'],
+                    messages=messages.messages,
                     max_completion_tokens=model['max_response_tokens'],
-                    temperature=temperature,
                     top_p=top_p,
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
@@ -200,13 +226,13 @@ def conversation(request):
 
         # insert new messages
         try:
-            for m in message_object_list:
+            for m in raw_input_messages:
                 message_obj = create_message(
                     user=request.user,
                     conversation_id=conversation_obj.id,
-                    message=m['content'],
-                    messages=messages['messages'],
-                    tokens=messages['tokens'],
+                    message=m,
+                    messages=messages.messages,
+                    tokens=messages.tokens,
                     api_key=api_key
                 )
                 yield sse_pack('userMessageId', {
@@ -222,7 +248,7 @@ def conversation(request):
 
         collected_events = []
         completion_text = ''
-        if messages['renew']:  # return LLM answer
+        if messages.renew:  # return LLM answer
             # iterate through the stream of events
             for event in openai_response:
                 collected_events.append(event)  # save the event response
@@ -264,14 +290,17 @@ def conversation(request):
     return response
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def documents(request):
-    pass
-
-
-def create_message(user, conversation_id, message, is_bot=False, message_type=0, embedding_doc_id=None, messages='',
-                   tokens=0, api_key=None):
+# def create_message(user, conversation_id, message, is_bot=False, message_type=0, embedding_doc_id=None, messages='',
+#                    tokens=0, api_key=None):
+def create_message(user: User,
+                   conversation_id: int,
+                   message: str,
+                   is_bot: bool = False,
+                   message_type: int = 0,
+                   embedding_doc_id: Optional[int] = None,
+                   messages: List[str] = [],
+                   tokens: int = 0,
+                   api_key: Optional[ApiKey] = None) -> Message:
     message_obj = Message(
         conversation_id=conversation_id,
         user=user,
@@ -290,7 +319,7 @@ def create_message(user, conversation_id, message, is_bot=False, message_type=0,
     return message_obj
 
 
-def increase_token_usage(user, tokens, api_key=None):
+def increase_token_usage(user: User, tokens: int, api_key: Optional[ApiKey] = None) -> None:
     token_usage, created = TokenUsage.objects.get_or_create(user=user)
     token_usage.tokens += tokens
     token_usage.save()
@@ -300,7 +329,18 @@ def increase_token_usage(user, tokens, api_key=None):
         api_key.save()
 
 
-def build_messages(model, conversation_id, new_messages, system_content, frugal_mode=False):
+class BuildMessagesOutput(BaseModel):
+    renew: bool
+    messages: List[str]
+    tokens: int
+
+
+def build_messages(model: Dict[str, Union[str, int]],
+                   conversation_id: Optional[int],
+                   new_messages: List[str],
+                   system_content: str,
+                   frugal_mode: bool = False
+                   ) -> BuildMessagesOutput:
     if conversation_id:
         ordered_messages = Message.objects.filter(conversation_id=conversation_id).order_by('created_at')
         ordered_messages_list = list(ordered_messages)
@@ -309,7 +349,7 @@ def build_messages(model, conversation_id, new_messages, system_content, frugal_
 
     ordered_messages_list += [{
         'is_bot': False,
-        'message': msg['content'],
+        'message': msg,
     } for msg in new_messages]
 
     if frugal_mode:
@@ -323,11 +363,11 @@ def build_messages(model, conversation_id, new_messages, system_content, frugal_
 
     messages = []
 
-    result = {
-        'renew': True,
-        'messages': messages,
-        'tokens': 0,
-    }
+    result: BuildMessagesOutput = BuildMessagesOutput(
+        renew=True,
+        messages=messages,
+        tokens=0,
+    )
 
     logger.debug('new message is: %s', new_messages)
     logger.debug('messages are: %s', ordered_messages_list)
@@ -349,8 +389,8 @@ def build_messages(model, conversation_id, new_messages, system_content, frugal_
         messages.insert(0, new_message)
         current_token_count = new_token_count
 
-    result['messages'] = system_messages + messages
-    result['tokens'] = current_token_count
+    result.messages = system_messages + messages
+    result.tokens = current_token_count
 
     return result
 
@@ -365,18 +405,18 @@ def get_current_model(model_name, request_max_response_tokens):
     return model
 
 
-def get_api_key_from_setting():
+def get_api_key_from_setting() -> Optional[str]:
     row = Setting.objects.filter(name='openai_api_key').first()
     if row and row.value != '':
         return row.value
     return None
 
 
-def get_api_key():
+def get_api_key() -> Optional[ApiKey]:
     return ApiKey.objects.filter(is_enabled=True).order_by('token_used').first()
 
 
-def num_tokens_from_text(text, model="gpt-3.5-turbo-0301"):
+def num_tokens_from_text(text: str, model: str = "gpt-4o-mini") -> int:
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
@@ -404,7 +444,7 @@ def num_tokens_from_text(text, model="gpt-3.5-turbo-0301"):
     return len(encoding.encode(text))
 
 
-def num_tokens_from_messages(messages, model="gpt-3.5-turbo-0301"):
+def num_tokens_from_messages(messages: List[Dict[str, str]], model: str = "gpt-4o-mini") -> int:
     """Returns the number of tokens used by a list of messages."""
     try:
         encoding = tiktoken.encoding_for_model(model)
@@ -412,25 +452,12 @@ def num_tokens_from_messages(messages, model="gpt-3.5-turbo-0301"):
         print("Warning: model not found. Using cl100k_base encoding.")
         encoding = tiktoken.get_encoding("cl100k_base")
 
-    if model in ["gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-32k"]:
-        print(
-            f"Warning: {model} may change over time.",
-            f"Returning num tokens assuming {model}-0613."
-        )
-        return num_tokens_from_messages(messages, model=f"{model}-0613")
-
     if model in [
-        "gpt-3.5-turbo-0613",
-        "gpt-3.5-turbo-16k-0613",
-        "gpt-4-32k-0613",
-        "gpt-4-1106-preview",
-        "gpt-4o"
+        "gpt-4o",
+        "gpt-4o-mini",
     ]:
         tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
         tokens_per_name = -1  # if there's a name, the role is omitted
-    elif model in ["gpt-4-0613"]:
-        tokens_per_message = 3
-        tokens_per_name = 1
     else:
         raise NotImplementedError((
             f"num_tokens_from_messages() is not implemented for model {model}. "
@@ -449,7 +476,7 @@ def num_tokens_from_messages(messages, model="gpt-3.5-turbo-0301"):
     return num_tokens
 
 
-def get_openai(openai_api_key):
+def get_openai(openai_api_key: str) -> Any:
     openai.api_key = openai_api_key
     proxy = os.getenv('OPENAI_API_PROXY')
     if proxy:
