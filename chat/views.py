@@ -90,22 +90,6 @@ class PromptViewSet(viewsets.ModelViewSet):
         return Response(status=204)
 
 
-MODELS = {
-    'gpt-4o': {
-        'name': 'gpt-4o',
-        'max_tokens': 144384,
-        'max_prompt_tokens': 128000,
-        'max_response_tokens': 16384,
-    },
-    'gpt-4o-mini': {
-        'name': 'gpt-4o-mini',
-        'max_tokens': 144384,
-        'max_prompt_tokens': 128000,
-        'max_response_tokens': 16384,
-    }
-}
-
-
 def sse_pack(event, data):
     # Format data as an SSE message
     packet = "event: %s\n" % event
@@ -115,10 +99,10 @@ def sse_pack(event, data):
 
 
 class ConversationRequest(BaseModel):
-    name: Optional[str]
+    modal_name: Optional[str] = None
     messages: List[str]
-    conversationId: Optional[int]
-    max_tokens: Optional[int]
+    conversationId: Optional[int] = None
+    max_tokens: Optional[int] = None
     system_content: Optional[str] = "You are a helpful assistant."
     top_p: Optional[float] = 1
     frequency_penalty: Optional[float] = 0
@@ -151,7 +135,7 @@ def conversation(request: Request) -> Response | StreamingHttpResponse:
     except ValidationError as e:
         return Response({'error': e.errors()}, status=status.HTTP_400_BAD_REQUEST)
 
-    model_name = data.name
+    model_name = data.modal_name
     raw_input_messages = data.messages
     conversation_id = data.conversationId
     request_max_response_tokens = data.max_tokens
@@ -197,21 +181,24 @@ def conversation(request: Request) -> Response | StreamingHttpResponse:
     def stream_content():
         try:
             if messages.renew:
-                openai_response = my_openai.ChatCompletion.create(
-                    model=model['name'],
-                    messages=messages.messages,
-                    max_completion_tokens=model['max_response_tokens'],
-                    top_p=top_p,
-                    frequency_penalty=frequency_penalty,
-                    presence_penalty=presence_penalty,
-                    stream=is_stream,
-                    stream_options={"include_usage": True}
-                )
+                chat_completion_params = {
+                    'model': model['name'],
+                    'messages': messages.messages,
+                    'max_completion_tokens': model['max_response_tokens'],
+                    'top_p': top_p,
+                    'frequency_penalty': frequency_penalty,
+                    'presence_penalty': presence_penalty,
+                    'stream': is_stream,
+                    'stream_options': {"include_usage": True} if is_stream else None
+                }
+                logger.debug('Sending message to OpenAI, params: %', chat_completion_params.__str__())
+                openai_response = my_openai.ChatCompletion.create(**chat_completion_params)
+                logger.debug('OpenAI response: %s', openai_response)
         except Exception as e:
             yield sse_pack('error', {
                 'error': str(e)
             })
-            print('openai error', e)
+            logger.error('openai error', e)
             return
 
         if conversation_id:
@@ -244,12 +231,10 @@ def conversation(request: Request) -> Response | StreamingHttpResponse:
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        collected_events = []
         completion_text = ''
         if messages.renew:  # return LLM answer
             # iterate through the stream of events
             for event in openai_response:
-                collected_events.append(event)  # save the event response
                 # print(event)
                 if event['choices'][0]['finish_reason'] is not None:
                     break

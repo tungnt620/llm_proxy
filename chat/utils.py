@@ -6,23 +6,29 @@ import openai
 import tiktoken
 from django.contrib.auth.models import User
 from django.forms.models import model_to_dict
-from django.http import StreamingHttpResponse
-from pydantic import BaseModel, ValidationError
-from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.request import Request
-from rest_framework.response import Response
+from pydantic import BaseModel
 
 from provider.models import ApiKey
 from stats.models import TokenUsage
-from .llm import setup_openai_env as llm_openai_env
-from .llm import setup_openai_model as llm_openai_model
-from .models import Conversation, Message, EmbeddingDocument, Setting, Prompt
-from .serializers import ConversationSerializer, MessageSerializer, PromptSerializer, SettingSerializer
+from .models import Message, EmbeddingDocument, Setting
 from typing import List, Optional, Dict, Any, Union
 
 logger = logging.getLogger(__name__)
+
+MODELS = {
+    'gpt-4o': {
+        'name': 'gpt-4o',
+        'max_tokens': 144384,
+        'max_prompt_tokens': 128000,
+        'max_response_tokens': 16384,
+    },
+    'gpt-4o-mini': {
+        'name': 'gpt-4o-mini',
+        'max_tokens': 144384,
+        'max_prompt_tokens': 128000,
+        'max_response_tokens': 16384,
+    }
+}
 
 
 def create_message(user: User,
@@ -128,7 +134,8 @@ def build_messages(model: Dict[str, Union[str, int]],
     return result
 
 
-def get_current_model(model_name, request_max_response_tokens):
+def get_current_model(model_name: Optional[str], request_max_response_tokens: Optional[int]) -> (
+        Dict)[str, Union[str, int]]:
     if model_name is None:
         model_name = "gpt-4o"
     model = MODELS[model_name]

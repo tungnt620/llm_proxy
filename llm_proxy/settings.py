@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
 import os
+import sys
 from datetime import timedelta
 
 import dj_database_url
@@ -104,6 +105,13 @@ DATABASES = {
     'default': db_config
 }
 
+# Check if the code is running in test mode
+# TODO: how to manage settings for test mode? secret keys, etc.
+if 'test' in sys.argv:
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': os.path.join(BASE_DIR, 'test_db.sqlite3'),  # Optional test database name
+    }
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
