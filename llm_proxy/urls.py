@@ -20,7 +20,6 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, Spec
 
 urlpatterns = [
     path('api/chat/', include('chat.urls')),
-    path('api/conversation/', conversation, name='conversation'),
     path('api/account/', include('account.urls')),
     path('admin/', admin.site.urls),
 

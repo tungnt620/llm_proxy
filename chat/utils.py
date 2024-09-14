@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 
@@ -10,25 +9,11 @@ from pydantic import BaseModel
 
 from provider.models import ApiKey
 from stats.models import TokenUsage
+from .config import MODELS
 from .models import Message, EmbeddingDocument, Setting
 from typing import List, Optional, Dict, Any, Union
 
 logger = logging.getLogger(__name__)
-
-MODELS = {
-    'gpt-4o': {
-        'name': 'gpt-4o',
-        'max_tokens': 144384,
-        'max_prompt_tokens': 128000,
-        'max_response_tokens': 16384,
-    },
-    'gpt-4o-mini': {
-        'name': 'gpt-4o-mini',
-        'max_tokens': 144384,
-        'max_prompt_tokens': 128000,
-        'max_response_tokens': 16384,
-    }
-}
 
 
 def create_message(user: User,
@@ -163,20 +148,10 @@ def num_tokens_from_text(text: str, model: str = "gpt-4o-mini") -> int:
         print("Warning: model not found. Using cl100k_base encoding.")
         encoding = tiktoken.get_encoding("cl100k_base")
 
-    if model in ["gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-32k"]:
-        print(
-            f"Warning: {model} may change over time.",
-            f"Returning num tokens assuming {model}-0613."
-        )
-        return num_tokens_from_text(text, model=f"{model}-0613")
-
     if model not in [
-        "gpt-3.5-turbo-0613",
-        "gpt-4-0613",
-        "gpt-3.5-turbo-16k-0613",
-        "gpt-4-32k-0613",
-        "gpt-4-1106-preview",
-        "gpt-4o"
+        "gpt-4o",
+        "gpt-4o-2024-08-06",
+        "gpt-4o-mini",
     ]:
         raise NotImplementedError(
             f"num_tokens_from_text() is not implemented for model {model}.")
@@ -194,6 +169,7 @@ def num_tokens_from_messages(messages: List[Dict[str, str]], model: str = "gpt-4
 
     if model in [
         "gpt-4o",
+        "gpt-4o-2024-08-06",
         "gpt-4o-mini",
     ]:
         tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n

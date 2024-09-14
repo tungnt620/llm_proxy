@@ -1,6 +1,6 @@
 from django.urls import include, path
 from rest_framework import routers
-from .views import ConversationViewSet, MessageViewSet, PromptViewSet, SettingViewSet
+from .views import ConversationViewSet, MessageViewSet, PromptViewSet, SettingViewSet, conversation
 
 router = routers.SimpleRouter()
 router.register(r'conversations', ConversationViewSet, basename='conversationModel')
@@ -12,4 +12,5 @@ router.register(r'settings', SettingViewSet, basename='settingModel')
 # Additionally, we include login URLs for the browsable API.
 urlpatterns = [
     path('', include(router.urls)),
+    path('conversation', conversation, name='conversation'),
 ]

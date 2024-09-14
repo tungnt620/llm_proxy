@@ -59,6 +59,8 @@ python3 manage.py runserver
 python3 manage.py createsuperuser
 ```
 
+### Follow SOLID principles
+
 ## Deployment
 - First time
 

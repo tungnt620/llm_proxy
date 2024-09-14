@@ -10,13 +10,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .llm import setup_openai_env as llm_openai_env
-from .llm import setup_openai_model as llm_openai_model
 from .models import Conversation, Message, Setting, Prompt
 from .serializers import ConversationSerializer, MessageSerializer, PromptSerializer, SettingSerializer
 from typing import List, Optional
 
-from .utils import get_api_key_from_setting, get_openai, get_current_model, build_messages, create_message, \
+from .services.openai_service import OpenAIService
+from .utils import get_api_key_from_setting, get_current_model, build_messages, create_message, \
     num_tokens_from_text
 
 logger = logging.getLogger(__name__)
@@ -104,9 +103,9 @@ class ConversationRequest(BaseModel):
     conversationId: Optional[int] = None
     max_tokens: Optional[int] = None
     system_content: Optional[str] = "You are a helpful assistant."
-    top_p: Optional[float] = 1
-    frequency_penalty: Optional[float] = 0
-    presence_penalty: Optional[float] = 0
+    top_p: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
     frugalMode: Optional[bool] = False
     is_stream: Optional[bool] = False
 
@@ -148,23 +147,8 @@ def conversation(request: Request) -> Response | StreamingHttpResponse:
 
     logger.debug('conversation_id = %s raw_input_messages = %s', conversation_id, raw_input_messages)
 
-    api_key = None
-
-    openai_api_key = get_api_key_from_setting()
-
-    if openai_api_key is None:
-        return Response(
-            {
-                'error': 'There is no available API key'
-            },
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    my_openai = get_openai(openai_api_key)
-    llm_openai_env(my_openai.api_base, my_openai.api_key)
-
+    api_key: str = get_api_key_from_setting()
     model = get_current_model(model_name, request_max_response_tokens)
-    llm_openai_model(model)
 
     try:
         messages = build_messages(model, conversation_id, raw_input_messages, system_content, frugal_mode)
@@ -181,24 +165,18 @@ def conversation(request: Request) -> Response | StreamingHttpResponse:
     def stream_content():
         try:
             if messages.renew:
-                chat_completion_params = {
-                    'model': model['name'],
-                    'messages': messages.messages,
-                    'max_completion_tokens': model['max_response_tokens'],
-                    'top_p': top_p,
-                    'frequency_penalty': frequency_penalty,
-                    'presence_penalty': presence_penalty,
-                    'stream': is_stream,
-                    'stream_options': {"include_usage": True} if is_stream else None
-                }
-                logger.debug('Sending message to OpenAI, params: %', chat_completion_params.__str__())
-                openai_response = my_openai.ChatCompletion.create(**chat_completion_params)
-                logger.debug('OpenAI response: %s', openai_response)
+                openai_response = OpenAIService(api_key).send_messages(
+                    model=model,
+                    messages=messages.messages,
+                    is_stream=is_stream,
+                    top_p=top_p,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty
+                )
         except Exception as e:
             yield sse_pack('error', {
                 'error': str(e)
             })
-            logger.error('openai error', e)
             return
 
         if conversation_id:
@@ -218,12 +196,12 @@ def conversation(request: Request) -> Response | StreamingHttpResponse:
                     message=m,
                     messages=messages.messages,
                     tokens=messages.tokens,
-                    api_key=api_key
                 )
                 yield sse_pack('userMessageId', {
                     'userMessageId': message_obj.id,
                 })
         except Exception as e:
+            logger.error('Error creating user messages: %s', e)
             return Response(
                 {
                     'error': e
@@ -257,7 +235,6 @@ def conversation(request: Request) -> Response | StreamingHttpResponse:
             message_type=bot_message_type,
             is_bot=True,
             tokens=ai_message_token,
-            api_key=api_key
         )
         yield sse_pack('done', {
             'messageId': ai_message_obj.id,

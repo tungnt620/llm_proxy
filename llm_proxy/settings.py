@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/4.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.1/ref/settings/
 """
-
+import logging
 import os
 import sys
 from datetime import timedelta
@@ -131,6 +131,37 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+            'stream': sys.stdout,  # Send logs to stdout (console)
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'DEBUG',  # Set this to 'DEBUG' or 'INFO' based on your need
+            'propagate': True,
+        },
+        'django.db.backends': {
+            'handlers': ['console'],
+            'level': 'DEBUG',  # This is useful if you want to see SQL queries being executed
+            'propagate': False,
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'DEBUG',
+    },
+}
+
+# Optional: During testing, you might want to ensure this logger is active
+if 'test' in sys.argv:
+    LOGGING['loggers']['django']['level'] = 'DEBUG'
 
 # Internationalization
 # https://docs.djangoproject.com/en/4.1/topics/i18n/
